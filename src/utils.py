@@ -1,16 +1,16 @@
 import os
 import inspect
+from dataclasses import dataclass
 from collections.abc import Mapping
+from typing import Text
 
 import torch
 from accelerate import Accelerator
-from transformers import TrainerCallback
-
-from trl.import_utils import is_peft_available
-
-
-if is_peft_available():
-    from peft import get_peft_model, prepare_model_for_kbit_training
+from transformers import (
+    PreTrainedTokenizer,
+    TrainerCallback, 
+    StoppingCriteria,
+)
 
 
 class PeftSavingCallback(TrainerCallback):
@@ -24,6 +24,11 @@ class PeftSavingCallback(TrainerCallback):
 
 
 def prepare_model_for_peft(model, peft_config, args):
+    from trl.import_utils import is_peft_available
+
+    if is_peft_available():
+        from peft import get_peft_model, prepare_model_for_kbit_training
+
     if not is_peft_available() and peft_config is not None:
         raise ValueError(
             "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -69,6 +74,7 @@ def prepare_model_for_peft(model, peft_config, args):
     
     return model
 
+
 @Accelerator().on_local_main_process
 def print_local_main(text):
     print(text)
@@ -105,3 +111,15 @@ def prepare_input(data):
         #     kwargs.update({"dtype": Accelerator().state.deepspeed_plugin.hf_ds_config.dtype()})
         return data.to(**kwargs)
     return data
+
+
+@dataclass
+class StopOnStringCriteria(StoppingCriteria):
+    start_length: int
+    eos_string: Text
+    tokenizer: PreTrainedTokenizer
+
+    def __call__(self, input_ids, scores, **kwargs):
+        """Returns true if all generated sequences contain any of the end-of-function strings."""
+        decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length:])
+        return all(self.eos_string in decoded_generation for decoded_generation in decoded_generations) # Stop when ALL sequences hit the stopping critera

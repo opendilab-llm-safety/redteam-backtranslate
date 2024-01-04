@@ -6,7 +6,7 @@ import torch
 from accelerate import Accelerator
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-from utils import prepare_input, param_sharding_enabled
+from src.utils import prepare_input, param_sharding_enabled
  
 
 @dataclass
@@ -22,7 +22,7 @@ class ClassiferBase(ABC):
 
 @dataclass
 class ClassifierBeaverTails(ClassiferBase):
-    model_name: Text
+    model_name: Optional[Text] = "meta-llama/Llama-2-7b-hf"
     use_flash_attention_2: Optional[bool] = True
     classification_template: Optional[Text] = "\n\nHuman:\n{instruction}\n\nAssistant:\n{response}"
 
@@ -34,15 +34,13 @@ class ClassifierBeaverTails(ClassiferBase):
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
             num_labels=2,
-            torch_dtype=torch.float16,
-            use_flash_attention_2=self.use_flash_attention_2,
-            **({"device_map": {"": Accelerator().local_process_index}} if not param_sharding_enabled() else {}),
             id2label=self.id2label,
             label2id=self.label2id,
+            use_flash_attention_2=self.use_flash_attention_2,
+            **({"device_map": {"": Accelerator().local_process_index}} if not param_sharding_enabled() else {}),
         )
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.tokenizer.padding_side = "right"
 
     def apply_chat_template(self, chat: ChatInput):
         return self.classification_template.format(instruction=chat.instruction, response=chat.response)

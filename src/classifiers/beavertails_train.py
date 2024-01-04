@@ -10,15 +10,15 @@ from peft import LoraConfig
 from accelerate import Accelerator
 from datasets import load_dataset 
 
-from utils import print_local_main, disable_progress_bar_non_local_main, prepare_model_for_peft, PeftSavingCallback
-from classifier.modules import ClassifierBeaverTails, ChatInput
+from src.utils import print_local_main, disable_progress_bar_non_local_main, prepare_model_for_peft, PeftSavingCallback
+from src.classifiers.modules import ClassifierBeaverTails, ChatInput
 
 disable_progress_bar_non_local_main()
 
 @dataclass
 class ScriptArguments:
 
-    model_name: str = field(metadata={"help": "the base model name"})
+    model_name: str = field(default="meta-llama/Llama-2-7b-hf", metadata={"help": "the base model name"})
     use_flash_attention_2: Optional[bool] = field(default=True, metadata={"help": "whether to use flash attention 2"})
     sanity_check: Optional[bool] = field(default=False, metadata={"help": "whether to conduct sanity check"})
     num_proc: Optional[int] = field(default=4, metadata={"help": "num_proc for dataset.map"})
@@ -35,7 +35,7 @@ class ScriptArguments:
             lr_scheduler_type="cosine",
             warmup_steps=0.1,
             weight_decay=0.05,
-            fp16=True,
+            bf16=True,
             remove_unused_columns=False,
             run_name="classifier/beavertails",
             report_to="wandb",
@@ -46,7 +46,7 @@ class ScriptArguments:
             eval_steps=0.2,
             eval_delay=0.2,
             evaluation_strategy="steps",
-            save_total_limit=3,
+            save_total_limit=2,
             metric_for_best_model="accuracy",
             load_best_model_at_end=True,
         )
@@ -67,21 +67,20 @@ script_args = tyro.cli(ScriptArguments)
 
 # base model
 print_local_main("loading model...")
-classifier = ClassifierBeaverTails(model_name=script_args.model_name, use_flash_attention_2=script_args.use_flash_attention_2)
-model = classifier.model
-tokenizer = classifier.tokenizer
-
-model.score = model.score.float() # score head is not trainabled if loaded with torch.float16
+classifier = ClassifierBeaverTails(
+    model_name=script_args.model_name, 
+    use_flash_attention_2=script_args.use_flash_attention_2
+)
+model, tokenizer = classifier.model, classifier.tokenizer
 print_local_main(model)
 
-if script_args.peft_config:
+if script_args.peft:
     print_local_main("initializing peft...")
     model = prepare_model_for_peft(model, script_args.peft_config, script_args.training_args)
-    if Accelerator().is_local_main_process:
-        model.print_trainable_parameters()
-    callbacks=[PeftSavingCallback]
+    if Accelerator().is_local_main_process: model.print_trainable_parameters()
+    callbacks = [PeftSavingCallback]
 else:
-    callbacks=[]
+    callbacks = []
 
 def map_func(examples):
     instructions = examples["prompt"]
