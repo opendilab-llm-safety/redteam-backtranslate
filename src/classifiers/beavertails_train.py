@@ -10,8 +10,8 @@ from peft import LoraConfig
 from accelerate import Accelerator
 from datasets import load_dataset 
 
-from src.utils import print_local_main, disable_progress_bar_non_local_main, prepare_model_for_peft, PeftSavingCallback
-from src.classifiers.modules import ClassifierBeaverTails, ChatInput
+from src.utils import print_local_main, disable_progress_bar_non_local_main, prepare_model_for_peft, PeftSavingCallback, ChatInput
+from src.classifiers.modules import ClassifierBeaverTails
 
 disable_progress_bar_non_local_main()
 
@@ -96,7 +96,7 @@ def preprocess_dataset(dataset):
 
 # dataset 
 train_dataset = preprocess_dataset(load_dataset('PKU-Alignment/BeaverTails', split='330k_train'))
-eval_dataset  = preprocess_dataset(load_dataset('PKU-Alignment/BeaverTails', split='30k_train'))
+eval_dataset  = preprocess_dataset(load_dataset('PKU-Alignment/BeaverTails', split='330k_test'))
 
 def compute_metrics(eval_pred):
     metric = evaluate.load("accuracy")

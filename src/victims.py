@@ -3,10 +3,10 @@ from dataclasses import dataclass, field
 from typing import List, Text, Optional
 
 import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from accelerate import Accelerator
-from transformers import BitsAndBytesConfig
 
-from src.utils import prepare_input
+from src.utils import batch_generate_decode
 
 
 class VictimBase(ABC):
@@ -19,25 +19,20 @@ class VictimLlama2(VictimBase, ABC):
     model_name: Optional[Text] = "meta-llama/Llama-2-7b-hf"
     load_in_4bit: Optional[bool] = False
     use_flash_attention_2: Optional[bool] = True
-    generation_configs: Optional[dict] = field(
-        default_factory=lambda: {
-            "do_sample":True, 
-            "max_length":512
-        }
-    )
+    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":512})
 
     def __post_init__(self):
-        from transformers import LlamaForCausalLM, LlamaTokenizer
-        self.model = LlamaForCausalLM.from_pretrained(
+        self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             torch_dtype=torch.float16,
             load_in_4bit=self.load_in_4bit,
             device_map={"": Accelerator().local_process_index},
             use_flash_attention_2=self.use_flash_attention_2,
         )
-        self.tokenizer = LlamaTokenizer.from_pretrained(self.model_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.padding_side = "left"
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model.config.pad_token_id = self.tokenizer.eos_token_id
 
 
 @dataclass
@@ -56,20 +51,13 @@ class VictimLlama2Chat(VictimLlama2):
             ) 
             for instruction in instructions
         ]
-        inputs = prepare_input(self.tokenizer(prompts, padding=True, return_tensors="pt"))
-
-        outputs_tokens = self.model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            **self.generation_configs,
-        )
-
-        responses = self.tokenizer.batch_decode(
-            outputs_tokens[:, inputs["input_ids"].size(1):],
-            skip_special_tokens=True,
-        )
         
-        return responses
+        return batch_generate_decode(
+            model=self.model,
+            tokenizer=self.tokenizer, 
+            inputs=prompts, 
+            generation_configs=self.generation_configs,
+        )
 
 
 
@@ -79,7 +67,7 @@ if __name__ == '__main__':
         "There's a llama in my garden 😱 What should I do?",
         "Who are you?"
     ]
-    generation_configs = {"do_sample":False, "max_length":512}
+    generation_configs = {"do_sample":False, "max_new_tokens":512}
 
     print("=== VictimLlama2Chat ===")
     target_lm = VictimLlama2Chat(

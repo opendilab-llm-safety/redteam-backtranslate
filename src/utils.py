@@ -1,15 +1,19 @@
 import os
 import inspect
+import math
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Text
+from typing import Text, List, Optional, Iterator, TypeVar
 
 import torch
+from torch.utils.data import Sampler, Dataset
 from accelerate import Accelerator
 from transformers import (
+    PreTrainedModel,
     PreTrainedTokenizer,
     TrainerCallback, 
     StoppingCriteria,
+    StoppingCriteriaList,
 )
 
 
@@ -114,6 +118,12 @@ def prepare_input(data):
 
 
 @dataclass
+class ChatInput:
+    instruction: Text
+    response: Text
+
+
+@dataclass
 class StopOnStringCriteria(StoppingCriteria):
     start_length: int
     eos_string: Text
@@ -123,3 +133,69 @@ class StopOnStringCriteria(StoppingCriteria):
         """Returns true if all generated sequences contain any of the end-of-function strings."""
         decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length:])
         return all(self.eos_string in decoded_generation for decoded_generation in decoded_generations) # Stop when ALL sequences hit the stopping critera
+
+
+def batch_generate_decode(
+    model: PreTrainedModel, 
+    tokenizer: PreTrainedTokenizer, 
+    inputs: List[Text], 
+    eos_string=None,
+    generation_configs=None,
+) -> List[Text]:
+
+    # tokenized and move to device
+    inputs_tokens = prepare_input(tokenizer(inputs, padding=True, return_tensors="pt"))
+    start_length = inputs_tokens["input_ids"].size(1)
+
+    if eos_string:
+        stopping_criteria = StoppingCriteriaList([
+            StopOnStringCriteria(
+                start_length=start_length,
+                eos_string=eos_string,
+                tokenizer=tokenizer,
+            )
+        ])
+    else:
+        stopping_criteria = None
+
+    outputs_tokens = model.generate(
+        input_ids=inputs_tokens["input_ids"],
+        attention_mask=inputs_tokens["attention_mask"],
+        stopping_criteria=stopping_criteria, # optional
+        **generation_configs, #optional
+    )
+    outputs = tokenizer.batch_decode(
+        outputs_tokens[:, start_length:],
+        skip_special_tokens=True,
+    )
+    if eos_string:
+        outputs = [output[:output.find(eos_string)] for output in outputs]
+    return outputs
+
+
+T_co = TypeVar('T_co', covariant=True)
+class AsyncContiguousDistributedSampler(Sampler):
+    ""
+    def __init__(self, dataset: Dataset, num_replicas: Optional[int] = None,
+                 rank: Optional[int] = None) -> None:
+        if num_replicas is None:
+            num_replicas = Accelerator().num_processes
+        if rank is None:
+            rank = Accelerator().process_index
+        if rank >= num_replicas or rank < 0:
+            raise ValueError(
+                f"Invalid rank {rank}, rank should be in the interval [0, {num_replicas - 1}]")
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+
+        self.num_total_samples = len(dataset)
+        self.num_local_samples = math.ceil(self.num_total_samples / self.num_replicas)
+        self.local_starting_idx = self.num_local_samples * self.rank
+        # self.num_local_samples = len(dataset)
+
+    def __len__(self) -> int:
+        return len(list(iter(self)))
+
+    def __iter__(self) -> Iterator[T_co]:
+        return iter(list(range(len(self.dataset)))[self.local_starting_idx:self.local_starting_idx+self.num_local_samples])

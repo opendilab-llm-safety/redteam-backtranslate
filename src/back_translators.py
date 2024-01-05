@@ -4,11 +4,10 @@ from typing import List, Text, Optional
 
 import jinja2
 import torch
-from transformers import StoppingCriteriaList
+from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteriaList
 from accelerate import Accelerator
 
-from src.classifiers.modules import ChatInput
-from src.utils import prepare_input, StopOnStringCriteria
+from src.utils import batch_generate_decode, StopOnStringCriteria, ChatInput
 
 
 @dataclass
@@ -36,6 +35,9 @@ Instruction:
 """)
     eos_string: Optional[Text] = "\n\n"
 
+    def __post_init__(self):
+        pass # TODO: assert keywords in template
+
     def _apply_back_translate_template(self, input: BackTranslateInput) -> Text:
         return jinja2.Template(self.back_tranlsate_template).render(
             chat_examplars=input.chat_examplars, target_response=input.target_response)
@@ -46,24 +48,12 @@ Instruction:
 
 
 @dataclass
-class BackTranslatorLlama2(BackTranslatorBase):
-    model_name: Text = "meta-llama/Llama-2-7b-hf"
-    load_in_4bit: Optional[bool] = False
-    use_flash_attention_2: Optional[bool] = True
-    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_length":512})
+class BackTranslatorHFBase(BackTranslatorBase):
+    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":512})
 
     def __post_init__(self):
-        from transformers import LlamaForCausalLM, LlamaTokenizer
-        self.model = LlamaForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype=torch.float16,
-            load_in_4bit=self.load_in_4bit,
-            device_map={"": Accelerator().local_process_index},
-            use_flash_attention_2=self.use_flash_attention_2,
-        )
-        self.tokenizer = LlamaTokenizer.from_pretrained(self.model_name)
-        self.tokenizer.padding_side = "left"
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        super().__post_init__()
+        self.model, self.tokenizer = self._init_model_and_tokenizer()
         self.stopping_criteria_fn = lambda start_length: StoppingCriteriaList([
             StopOnStringCriteria(
                 start_length=start_length,
@@ -72,25 +62,40 @@ class BackTranslatorLlama2(BackTranslatorBase):
             )
         ])
 
+    @abstractclassmethod
+    def _init_model_and_tokenizer(self):
+        raise NotImplementedError
+
     def back_translate(self, inputs_batch: List[BackTranslateInput]) -> List[Text]:
         inputs_batch_templated = [self._apply_back_translate_template(input) for input in inputs_batch] 
-        inputs = prepare_input(self.tokenizer(inputs_batch_templated, padding=True, return_tensors="pt"))
-        start_length = inputs["input_ids"].size(1)
-        outputs_tokens = self.model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            stopping_criteria=self.stopping_criteria_fn(start_length=start_length),
-            **self.generation_configs,
+        return batch_generate_decode(
+            model=self.model,
+            tokenizer=self.tokenizer, 
+            inputs=inputs_batch_templated, 
+            eos_string=self.eos_string, 
+            generation_configs=self.generation_configs,
         )
-        target_instructions = self.tokenizer.batch_decode(
-            outputs_tokens[:, start_length:],
-            skip_special_tokens=True,
+
+
+@dataclass
+class BackTranslatorLlama2(BackTranslatorHFBase):
+    model_name: Text = "meta-llama/Llama-2-7b-hf"
+    load_in_4bit: Optional[bool] = False
+    use_flash_attention_2: Optional[bool] = True
+
+    def _init_model_and_tokenizer(self):
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float16,
+            load_in_4bit=self.load_in_4bit,
+            device_map={"": Accelerator().local_process_index},
+            use_flash_attention_2=self.use_flash_attention_2,
         )
-        target_instructions = [
-            target_instruction[:target_instruction.find(self.eos_string)] 
-            for target_instruction in target_instructions
-        ]
-        return target_instructions
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        tokenizer.padding_side = "left"
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = tokenizer.eos_token_id
+        return model, tokenizer
 
 
 
