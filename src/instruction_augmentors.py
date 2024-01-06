@@ -18,11 +18,11 @@ class InstructionAugmentorBase:
     instruct_template: Optional[Text] = (
 """List of questions to ask someone:
 {% for instruction_examplar in instruction_examplars %}
-{{ loop.index }}: {{ instruction_examplar }}
+{{ loop.index }}:```{{ instruction_examplar }}```
 {% endfor %}
-{{ instruction_examplars | length + 1 }}:
+{{ instruction_examplars | length + 1 }}:```\
 """)
-    eos_string: Optional[Text] = "\n\n"
+    eos_string: Optional[Text] = "```\n\n"
 
     def __post_init__(self):
         pass # TODO: assert keywords in template
@@ -98,6 +98,4 @@ if __name__ == "__main__":
         print(instruction)
     print("=== [passed] ===")
     breakpoint()
-
-
     

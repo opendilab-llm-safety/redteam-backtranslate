@@ -16,7 +16,7 @@ class ClassiferBase(ABC):
     def __post_init__(self):
         assert "{instruction}" in self.classification_template and "{response}" in self.classification_template 
 
-    def apply_chat_template(self, chat: ChatInput):
+    def apply_classification_template(self, chat: ChatInput):
         return self.classification_template.format(instruction=chat.instruction, response=chat.response)
 
     def predict(instructions: List[ChatInput]) -> List[float]:
@@ -52,7 +52,7 @@ class ClassifierBeaverTails(ClassiferBase):
 
     @torch.no_grad()
     def predict(self, chats_batch: List[ChatInput]) -> List[float]:
-        inputs_batch_templated = [self.apply_chat_template(input) for input in chats_batch]
+        inputs_batch_templated = [self.apply_classification_template(input) for input in chats_batch]
         inputs = prepare_input(self.tokenizer(inputs_batch_templated, padding=True, return_tensors="pt"))
         outputs = self.model(
             input_ids=inputs["input_ids"],

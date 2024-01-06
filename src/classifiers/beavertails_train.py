@@ -85,7 +85,7 @@ else:
 def map_func(examples):
     instructions = examples["prompt"]
     responses = examples["response"]
-    chats = [classifier.apply_chat_template(ChatInput(instruction, response)) for instruction, response in zip(instructions, responses)]
+    chats = [classifier.apply_classification_template(ChatInput(instruction, response)) for instruction, response in zip(instructions, responses)]
     labels = [int(label) for label in examples["is_safe"]]
     return {"label":labels, **tokenizer(chats, truncation=False)}
 

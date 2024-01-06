@@ -4,10 +4,10 @@ from typing import List, Text, Optional
 
 import jinja2
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, StoppingCriteriaList
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from accelerate import Accelerator
 
-from src.utils import batch_generate_decode, StopOnStringCriteria, ChatInput
+from src.utils import batch_generate_decode, ChatInput
 
 
 @dataclass
@@ -23,17 +23,17 @@ class BackTranslatorBase:
 The instruction should initialize the conversation and stay on-topic with the response.
 Here is some examples:
 {% for chat_examplar in chat_examplars %}
-Response:
-{{ chat_examplar.response }}
-Instruction:
-{{ chat_examplar.instruction }}
+# Response:
+```{{ chat_examplar.response }}```
+# Instruction:
+```{{ chat_examplar.instruction }}```
 {% endfor %}
-Response:
-{{ target_response }}
-Instruction:
-
+# Response:
+```{{ target_response }}```
+# Instruction:
+```\
 """)
-    eos_string: Optional[Text] = "\n\n"
+    eos_string: Optional[Text] = "```\n\n"
 
     def __post_init__(self):
         pass # TODO: assert keywords in template
@@ -54,13 +54,6 @@ class BackTranslatorHFBase(BackTranslatorBase):
     def __post_init__(self):
         super().__post_init__()
         self.model, self.tokenizer = self._init_model_and_tokenizer()
-        self.stopping_criteria_fn = lambda start_length: StoppingCriteriaList([
-            StopOnStringCriteria(
-                start_length=start_length,
-                eos_string=self.eos_string,
-                tokenizer=self.tokenizer,
-            )
-        ])
 
     @abstractclassmethod
     def _init_model_and_tokenizer(self):
@@ -125,6 +118,4 @@ if __name__ == "__main__":
         print(target_instructions)
     print("=== [passed] ===")
     breakpoint()
-
-
     
