@@ -60,7 +60,6 @@ class VictimLlama2Chat(VictimLlama2):
         )
 
 
-
 if __name__ == '__main__':
     # PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:1 --cpus-per-task=8 python3 src/victims.py
     instructions = [

@@ -38,7 +38,7 @@ Instruction:
     def __post_init__(self):
         pass # TODO: assert keywords in template
 
-    def _apply_back_translate_template(self, input: BackTranslateInput) -> Text:
+    def apply_back_translate_template(self, input: BackTranslateInput) -> Text:
         return jinja2.Template(self.back_tranlsate_template).render(
             chat_examplars=input.chat_examplars, target_response=input.target_response)
 
@@ -67,7 +67,7 @@ class BackTranslatorHFBase(BackTranslatorBase):
         raise NotImplementedError
 
     def back_translate(self, inputs_batch: List[BackTranslateInput]) -> List[Text]:
-        inputs_batch_templated = [self._apply_back_translate_template(input) for input in inputs_batch] 
+        inputs_batch_templated = [self.apply_back_translate_template(input) for input in inputs_batch] 
         return batch_generate_decode(
             model=self.model,
             tokenizer=self.tokenizer, 
@@ -114,7 +114,7 @@ if __name__ == "__main__":
             target_response="I became INFJ because INFJ’s are the best, and everyone else is stupid.",
         )
     ] * 2
-    template = BackTranslatorBase()._apply_back_translate_template(inputs_batch[0])
+    template = BackTranslatorBase().apply_back_translate_template(inputs_batch[0])
     print(template)
     print("\n\n")
 

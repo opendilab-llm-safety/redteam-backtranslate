@@ -1,14 +1,11 @@
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
-import tqdm
 import torch
-from torch.utils.data import DataLoader
-from accelerate import Accelerator
 
 from src.classifiers.modules import ClassiferBase
 from src.metrics.utils import Metrics
-from src.utils import ChatInput, AsyncContiguousDistributedSampler
+from src.utils import ChatInput, batchify_apply
 
 
 @dataclass
@@ -26,30 +23,24 @@ class MetricsClassifier(Metrics):
     classifier: ClassiferBase
     per_device_batch_size: Optional[int] = 8
     threshold: Optional[float] = .5
-    return_list: Optional[bool] = False
+    return_list: Optional[bool] = True
 
     def compute(self, corpus: List[ChatInput]) -> MetricsClassifierOutput:
-        self.dataloader = DataLoader(
-            corpus,
-            batch_size=self.per_device_batch_size,
-            shuffle=False,
-            collate_fn=lambda x:x, # dummy collator
-            sampler=AsyncContiguousDistributedSampler(corpus),
+        prob = batchify_apply(
+            self.classifier.predict, 
+            inputs_dataset=corpus, 
+            per_device_batch_size=self.per_device_batch_size, 
+            split_among_ranks=True,
         )
-        total_probs = []
-
-        for batch in tqdm.tqdm(self.dataloader, disable=not Accelerator().is_local_main_process):
-            batch_probs = self.classifier.predict(batch)
-            total_probs.append(batch_probs)
-
-        total_probs = torch.concat(total_probs)
-        gathered_probs = Accelerator().gather(total_probs)
+        prob = torch.Tensor(prob)
+        log_prob = prob.log()
+        positive_ratio = sum(prob > self.threshold) / prob.numel()
 
         optional_to_list = (lambda x: x.cpu().tolist()) if self.return_list else (lambda x:x)
         return MetricsClassifierOutput(
-            prob = optional_to_list(gathered_probs),
-            log_prob = optional_to_list(gathered_probs.log()),
-            positive_ratio = optional_to_list(sum(gathered_probs > self.threshold) / gathered_probs.numel()),
+            prob = optional_to_list(prob),
+            log_prob = optional_to_list(log_prob),
+            positive_ratio = optional_to_list(positive_ratio),
         )
 
 
@@ -65,8 +56,10 @@ if __name__ == "__main__":
     metrics = MetricsClassifier(
         classifier=ClassifierBeaverTails(
             model_name="output/classifier/beavertails/best_checkpoint"
-        )
+        ),
+        return_list=False,
     )
     results = metrics.compute(corpus)
+    print_local_main(results.prob)
     print_local_main(results.positive_ratio)
-    print_local_main(results.log_prob.shape)
+    print_local_main(results.prob.shape)

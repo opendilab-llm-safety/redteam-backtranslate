@@ -20,14 +20,14 @@ class InstructionAugmentorBase:
 {% for instruction_examplar in instruction_examplars %}
 {{ loop.index }}: {{ instruction_examplar }}
 {% endfor %}
-{{ instruction_examplars | length + 1}}:
+{{ instruction_examplars | length + 1 }}:
 """)
     eos_string: Optional[Text] = "\n\n"
 
     def __post_init__(self):
         pass # TODO: assert keywords in template
 
-    def _apply_instruction_augment_template(self, input: InstructionAugmentorInput) -> Text:
+    def apply_instruction_augment_template(self, input: InstructionAugmentorInput) -> Text:
         return jinja2.Template(self.instruct_template).render(instruction_examplars=input)
 
     @abstractclassmethod
@@ -48,7 +48,7 @@ class InstructionAugmentorHFBase(InstructionAugmentorBase):
         raise NotImplementedError
 
     def instruction_augment(self, inputs_batch: List[InstructionAugmentorInput]) -> List[Text]:
-        inputs_batch_templated = [self._apply_instruction_augment_template(input) for input in inputs_batch]
+        inputs_batch_templated = [self.apply_instruction_augment_template(input) for input in inputs_batch]
         return batch_generate_decode(
             model=self.model,
             tokenizer=self.tokenizer, 
@@ -87,7 +87,7 @@ if __name__ == "__main__":
             "If you could go back in time, what would you do?",
         ]
     ] * 2
-    template = InstructionAugmentorBase()._apply_instruction_augment_template(inputs_batch[0])
+    template = InstructionAugmentorBase().apply_instruction_augment_template(inputs_batch[0])
     print(template)
     print("\n\n")
 

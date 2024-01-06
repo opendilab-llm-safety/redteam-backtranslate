@@ -3,10 +3,12 @@ import inspect
 import math
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Text, List, Optional, Iterator, TypeVar
+from typing import Text, List, Any, Callable, Optional, Iterator, TypeVar
 
+import tqdm
 import torch
-from torch.utils.data import Sampler, Dataset
+from torch.utils.data import Sampler, Dataset, DataLoader
+import accelerate
 from accelerate import Accelerator
 from transformers import (
     PreTrainedModel,
@@ -199,3 +201,32 @@ class AsyncContiguousDistributedSampler(Sampler):
 
     def __iter__(self) -> Iterator[T_co]:
         return iter(list(range(len(self.dataset)))[self.local_starting_idx:self.local_starting_idx+self.num_local_samples])
+
+
+def batchify_apply(
+    fn: Callable,
+    inputs_dataset: List[Any], 
+    per_device_batch_size: int = 8,
+    split_among_ranks: bool = True, # split data among ranks and then all gather 
+) -> List[Text]:
+    """
+    This function splits `inputs_dataset` into multiple batchs, apply `fn` to each batch, and return the collected outputs from each batch.
+
+    args:
+    split_among_ranks: Optionally split `inputs_dataset` among different global ranks for parallel processing with multiple GPUs, 
+        then all gather results from each rank.
+    """
+    dataloader = DataLoader(
+        inputs_dataset,
+        batch_size=per_device_batch_size,
+        shuffle=False,
+        collate_fn=lambda x:x, # dummy collator
+        sampler=AsyncContiguousDistributedSampler(inputs_dataset) if split_among_ranks else None,
+    )
+    outputs_dataset = []
+    for inputs_batch in tqdm.tqdm(dataloader, disable=not Accelerator().is_local_main_process):
+        outputs_batch = fn(inputs_batch)
+        outputs_dataset.extend(outputs_batch)
+    if split_among_ranks:
+        outputs_dataset = accelerate.utils.gather_object(outputs_dataset)
+    return outputs_dataset

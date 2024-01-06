@@ -19,7 +19,7 @@ class ClassiferBase(ABC):
     def apply_chat_template(self, chat: ChatInput):
         return self.classification_template.format(instruction=chat.instruction, response=chat.response)
 
-    def predict(instructions: List[ChatInput]) -> torch.Tensor: # 1d tensor
+    def predict(instructions: List[ChatInput]) -> List[float]:
         """return the prob of positive(safe/positive/non-toxic etc.)"""
         raise NotImplementedError
 
@@ -51,14 +51,14 @@ class ClassifierBeaverTails(ClassiferBase):
         self.model.config.pad_token_id = self.tokenizer.eos_token_id
 
     @torch.no_grad()
-    def predict(self, chats_batch: List[ChatInput]) -> torch.Tensor: # 1d tensor
+    def predict(self, chats_batch: List[ChatInput]) -> List[float]:
         inputs_batch_templated = [self.apply_chat_template(input) for input in chats_batch]
         inputs = prepare_input(self.tokenizer(inputs_batch_templated, padding=True, return_tensors="pt"))
         outputs = self.model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
         )
-        return outputs.logits.softmax(-1)[:, -1]
+        return outputs.logits.softmax(-1)[:, -1].cpu().tolist()
 
 
 if __name__ == "__main__":
