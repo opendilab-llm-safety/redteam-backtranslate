@@ -208,7 +208,7 @@ def batchify_apply(
     inputs_dataset: List[Any], 
     per_device_batch_size: int = 8,
     split_among_ranks: bool = True, # split data among ranks and then all gather 
-) -> List[Text]:
+) -> List[Any]:
     """
     This function splits `inputs_dataset` into multiple batchs, apply `fn` to each batch, and return the collected outputs from each batch.
 

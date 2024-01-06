@@ -19,7 +19,7 @@ class VictimLlama2(VictimBase, ABC):
     model_name: Optional[Text] = "meta-llama/Llama-2-7b-hf"
     load_in_4bit: Optional[bool] = False
     use_flash_attention_2: Optional[bool] = True
-    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":512})
+    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":False, "max_new_tokens":512})
 
     def __post_init__(self):
         self.model = AutoModelForCausalLM.from_pretrained(
