@@ -203,6 +203,17 @@ class AsyncContiguousDistributedSampler(Sampler):
         return iter(list(range(len(self.dataset)))[self.local_starting_idx:self.local_starting_idx+self.num_local_samples])
 
 
+def set_seeds(seed):
+    import random
+    import numpy as np
+    import torch
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+
 def batchify_apply(
     fn: Callable,
     inputs_dataset: List[Any], 
@@ -230,3 +241,11 @@ def batchify_apply(
     if split_among_ranks:
         outputs_dataset = accelerate.utils.gather_object(outputs_dataset)
     return outputs_dataset
+
+
+class Registry(dict):
+    def register(self, module_name: Optional[str] = None) -> Callable:
+        def register_fn(module: Callable) -> Callable:
+            self[module_name] = module
+            return module
+        return register_fn

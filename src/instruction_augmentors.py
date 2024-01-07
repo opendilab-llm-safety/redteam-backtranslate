@@ -7,7 +7,10 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from accelerate import Accelerator
 
-from src.utils import batch_generate_decode
+from src.utils import batch_generate_decode, Registry
+
+
+InstructionAugmentorsRegistry = Registry()
 
 
 InstructionAugmentorInput = List[Text]
@@ -58,8 +61,9 @@ class InstructionAugmentorHFBase(InstructionAugmentorBase):
         )
 
 
+@InstructionAugmentorsRegistry.register("llama-2-fewshot")
 @dataclass
-class InstructionAugmentorLlama2(InstructionAugmentorHFBase):
+class InstructionAugmentorLlama2FewShot(InstructionAugmentorHFBase):
     model_name: Text = "meta-llama/Llama-2-7b-hf"
     load_in_4bit: Optional[bool] = False
     use_flash_attention_2: Optional[bool] = True
@@ -79,6 +83,13 @@ class InstructionAugmentorLlama2(InstructionAugmentorHFBase):
         return model, tokenizer
 
 
+@InstructionAugmentorsRegistry.register("llama-2-zeroshot")
+@dataclass
+class InstructionAugmentorLlama2ZeroShot(InstructionAugmentorLlama2FewShot):
+    def apply_instruction_augment_template(self, input: InstructionAugmentorInput) -> Text:
+        return super().apply_instruction_augment_template([])
+
+
 if __name__ == "__main__":
     # PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:1 --cpus-per-task=8 python3 src/instruction_augmentors.py
     inputs_batch = [
@@ -87,13 +98,23 @@ if __name__ == "__main__":
             "If you could go back in time, what would you do?",
         ]
     ] * 2
-    template = InstructionAugmentorBase().apply_instruction_augment_template(inputs_batch[0])
-    print(template)
-    print("\n\n")
+    # template = InstructionAugmentorBase().apply_instruction_augment_template(inputs_batch[0])
+    # print(template)
+    # print("\n\n")
+    model_name="/mnt/petrelfs/share_data/llm_llama/llama2/llama-2-70b-hf"
+    load_in_4bit=True
+    generation_configs = {"do_sample":True, "max_new_tokens":128, "temperature":1.0}
 
-    print("=== InstructionAugmentorLlama2 ===")
-    bt = InstructionAugmentorLlama2(model_name="/mnt/petrelfs/share_data/llm_llama/llama2/llama-2-7b-hf")
-    instructions = bt.instruction_augment(inputs_batch)
+    print("#"*40 + " [InstructionAugmentorLlama2FewShot] " + "#"*40)
+    ia = InstructionAugmentorLlama2FewShot(
+        model_name=model_name,
+        load_in_4bit=load_in_4bit,
+        generation_configs=generation_configs
+    )
+    print('-'*40 + ' [Prompt Start] ' + '-'*40)
+    print(ia.apply_instruction_augment_template(inputs_batch[0]))
+    print('-'*40 + ' [Prompt End] ' + '-'*40)
+    instructions = ia.instruction_augment(inputs_batch)
     for instruction in instructions:
         print(instruction)
     print("=== [passed] ===")
