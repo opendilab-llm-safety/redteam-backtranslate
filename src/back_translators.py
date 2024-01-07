@@ -19,8 +19,9 @@ class BackTranslateInput:
 @dataclass
 class BackTranslatorBase:
     back_tranlsate_template: Optional[Text] = (
-"""Please guess the most probable instruction that a certain response addresses. \
-The instruction should initialize the conversation and stay on-topic with the response.
+"""Please guess one potential instruction (under "# Instruction:") that a certain response addresses (under "# Response:"). \
+The instruction should initialize the conversation and the response should stay on-topic with the instruction. \
+Please be as creative as you can when making up the instruction. 
 Here is some examples:
 {% for chat_examplar in chat_examplars %}
 # Response:
@@ -49,7 +50,7 @@ Here is some examples:
 
 @dataclass
 class BackTranslatorHFBase(BackTranslatorBase):
-    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":512})
+    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":128})
 
     def __post_init__(self):
         super().__post_init__()
@@ -82,7 +83,7 @@ class BackTranslatorLlama2(BackTranslatorHFBase):
             torch_dtype=torch.float16,
             load_in_4bit=self.load_in_4bit,
             device_map={"": Accelerator().local_process_index},
-            use_flash_attention_2=self.use_flash_attention_2,
+            use_flash_attention_2=self.use_flash_attention_2, 
         )
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         tokenizer.padding_side = "left"
@@ -112,7 +113,7 @@ if __name__ == "__main__":
     print("\n\n")
 
     print("=== BackTranslatorLlama2 ===")
-    bt = BackTranslatorLlama2(model_name="/mnt/petrelfs/share_data/llm_llama/llama2/llama-2-7b-hf")
+    bt = BackTranslatorLlama2()
     target_instructions = bt.back_translate(inputs_batch)
     for target_instructions in target_instructions:
         print(target_instructions)
