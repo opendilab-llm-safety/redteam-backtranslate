@@ -7,7 +7,7 @@ import tyro
 from datasets import load_dataset, Dataset
 from accelerate import Accelerator
 
-from src.utils import batchify_apply, set_seeds
+from src.utils import batchify_apply, set_seeds, print_local_main
 from src.victims.victims import VictimsRegistry
 
 
@@ -23,6 +23,7 @@ class ScriptArguments:
         assert self.victim_model_cls in VictimsRegistry
         # f"victim_model({self.victim_model_cls}) should be with in {'\n'.join(VictimsRegistry.keys())}" 
 script_args = tyro.cli(ScriptArguments)
+print_local_main(script_args)
 set_seeds(script_args.seed)
 
 instructions_dataset = load_dataset("json", data_files=script_args.input_path, split='train')
@@ -39,6 +40,6 @@ responses = batchify_apply(
     split_among_ranks=True,
 )
 
-if Accelerator().is_main_process():
+if Accelerator().is_main_process:
     dataset = Dataset.from_dict({'response': responses, 'instruction': instructions_dataset['instruction']})
     dataset.to_json(script_args.output_path)

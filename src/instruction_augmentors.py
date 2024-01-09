@@ -4,7 +4,7 @@ from typing import List, Text, Optional
 
 import jinja2
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 from accelerate import Accelerator
 
 from src.utils import batch_generate_decode, Registry
@@ -40,6 +40,8 @@ class InstructionAugmentorBase:
 
 @dataclass
 class InstructionAugmentorHFBase(InstructionAugmentorBase):
+    model: Optional[PreTrainedModel] = None
+    model_name: Optional[Text] = None
     generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":512})
 
     def __post_init__(self):
@@ -69,18 +71,20 @@ class InstructionAugmentorLlama2FewShot(InstructionAugmentorHFBase):
     use_flash_attention_2: Optional[bool] = True
 
     def _init_model_and_tokenizer(self):
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype=torch.float16,
-            load_in_4bit=self.load_in_4bit,
-            device_map={"": Accelerator().local_process_index},
-            use_flash_attention_2=self.use_flash_attention_2,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        tokenizer.padding_side = "left"
-        tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.eos_token_id
-        return model, tokenizer
+        if self.model is None:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16,
+                load_in_4bit=self.load_in_4bit,
+                device_map={"": Accelerator().local_process_index},
+                use_flash_attention_2=self.use_flash_attention_2,
+            )
+        # make an extra copy of a tokenizer anyway
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model.config._name_or_path)
+        self.tokenizer.padding_side = "left"
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # self.model.config.pad_token_id = self.tokenizer.eos_token_id
+        return self.model, self.tokenizer
 
 
 @InstructionAugmentorsRegistry.register("llama-2-zeroshot")

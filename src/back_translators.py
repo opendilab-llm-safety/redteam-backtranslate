@@ -4,10 +4,12 @@ from typing import List, Text, Optional
 
 import jinja2
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 from accelerate import Accelerator
 
 from src.utils import batch_generate_decode, ChatInput, Registry
+from src.victims.victims import VictimBase
 
 
 BackTranslatorsRegistry = Registry()
@@ -53,17 +55,25 @@ Here is some examples:
 
 @dataclass
 class BackTranslatorHFBase(BackTranslatorBase):
-    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":128})
+    model: Optional[PreTrainedModel] = None
+    model_name: Optional[Text] = None
+    generation_configs: Optional[dict] = field(default_factory=lambda: {"do_sample":True, "max_new_tokens":128, "temperature":1.0, "top_p": 1.0})
+    # bt specific params
+    fluency_model: Optional[VictimBase] = None
+    num_candidate_instructions: Optional[int] = 8
+    candidate_temperature: Optional[int] = 20
 
     def __post_init__(self):
         super().__post_init__()
         self.model, self.tokenizer = self._init_model_and_tokenizer()
+        if self.fluency_model:
+            assert self.generation_configs["do_sample"] == True
 
     @abstractclassmethod
     def _init_model_and_tokenizer(self):
         raise NotImplementedError
 
-    def back_translate(self, inputs_batch: List[BackTranslateInput]) -> List[Text]:
+    def _back_translate(self, inputs_batch: List[BackTranslateInput]) -> List[Text]:
         inputs_batch_templated = [self.apply_back_translate_template(input) for input in inputs_batch]
         return batch_generate_decode(
             model=self.model,
@@ -71,7 +81,26 @@ class BackTranslatorHFBase(BackTranslatorBase):
             inputs=inputs_batch_templated, 
             eos_string=self.eos_string, 
             generation_configs=self.generation_configs,
-        )
+        )        
+
+    def back_translate(self, inputs_batch: List[BackTranslateInput]) -> List[Text]:
+        if self.fluency_model is None:
+            return self._back_translate(inputs_batch)
+        else:
+            candidate_instructions_list = [
+                self._back_translate([input]*self.num_candidate_instructions) for input in inputs_batch]
+            target_instructions = []
+            for target_response, candidate_instructions in zip(
+                [inputs.target_response for inputs in inputs_batch], 
+                candidate_instructions_list,
+            ):
+                inputs_to_rank = [ChatInput(candidate_instruction, target_response) 
+                    for candidate_instruction in candidate_instructions]
+                logps = self.fluency_model.cal_response_logps(inputs_to_rank)
+                probs = (torch.Tensor(logps) / self.candidate_temperature).softmax(-1).numpy()
+                choice = np.random.choice(probs.size, p=probs)
+                target_instructions.append(candidate_instructions[choice])
+            return target_instructions
 
 
 @BackTranslatorsRegistry.register("llama-2-fewshot")
@@ -82,18 +111,20 @@ class BackTranslatorLlama2FewShot(BackTranslatorHFBase):
     use_flash_attention_2: Optional[bool] = True
 
     def _init_model_and_tokenizer(self):
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype=torch.float16,
-            load_in_4bit=self.load_in_4bit,
-            device_map={"": Accelerator().local_process_index},
-            use_flash_attention_2=self.use_flash_attention_2, 
-        )
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        tokenizer.padding_side = "left"
-        tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.eos_token_id
-        return model, tokenizer
+        if self.model is None:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16,
+                load_in_4bit=self.load_in_4bit,
+                device_map={"": Accelerator().local_process_index},
+                use_flash_attention_2=self.use_flash_attention_2,
+            )
+        # make an extra copy of a tokenizer anyway
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model.config._name_or_path)
+        self.tokenizer.padding_side = "left"
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # self.model.config.pad_token_id = self.tokenizer.eos_token_id
+        return self.model, self.tokenizer
 
 
 @BackTranslatorsRegistry.register("llama-2-zeroshot")
@@ -106,6 +137,9 @@ class BackTranslatorLlama2ZeroShot(BackTranslatorLlama2FewShot):
 
 if __name__ == "__main__":
     # PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:1 --cpus-per-task=8 python3 src/back_translators.py
+    from src.victims.victims import VictimLlama2Chat, VictimLlama2FewShot, VictimLlama2ZeroShot
+    from src.utils import set_seeds; set_seeds(1)
+
     inputs_batch = [
         BackTranslateInput(
             chat_examplars=[
@@ -132,29 +166,37 @@ if __name__ == "__main__":
         )
     ] * 16
 
-    model_name="/mnt/petrelfs/share_data/llm_llama/llama2/llama-2-70b-hf"
-    load_in_4bit=True
+    model_name="/mnt/petrelfs/share_data/llm_llama/llama2/llama-2-7b-hf"
+    load_in_4bit=False
     generation_configs = {"do_sample":True, "max_new_tokens":128, "temperature":1.0}
 
-    print("#"*40 + " [BackTranslatorLlama2ZeroShot] " + "#"*40)
-    bt = BackTranslatorLlama2ZeroShot(
+    model_ = BackTranslatorLlama2ZeroShot(
         model_name=model_name,
         load_in_4bit=load_in_4bit,
         generation_configs=generation_configs
-    )
-    print('-'*40 + ' [Prompt Start] ' + '-'*40)
-    print(bt.apply_back_translate_template(inputs_batch[0]))
-    print('-'*40 + ' [Prompt End] ' + '-'*40)
-    target_instructions = bt.back_translate(inputs_batch)
-    for target_instructions in target_instructions:
-        print(target_instructions)
-    del bt
+    ).model
+
+    fm = VictimLlama2FewShot(model=model_)
+
+    # print("#"*40 + " [BackTranslatorLlama2ZeroShot] " + "#"*40)
+    # bt = BackTranslatorLlama2ZeroShot(
+    #     model=model_,
+    #     generation_configs=generation_configs,
+    #     fluency_model=fm,
+    # )
+    # print('-'*40 + ' [Prompt Start] ' + '-'*40)
+    # print(bt.apply_back_translate_template(inputs_batch[0]))
+    # print('-'*40 + ' [Prompt End] ' + '-'*40)
+    # target_instructions = bt.back_translate(inputs_batch)
+    # for target_instructions in target_instructions:
+    #     print(target_instructions)
+
 
     print("#"*40 + " [BackTranslatorLlama2FewShot] " + "#"*40)
     bt = BackTranslatorLlama2FewShot(
-        model_name=model_name,
-        load_in_4bit=load_in_4bit,
-        generation_configs=generation_configs
+        model=model_,
+        generation_configs=generation_configs,
+        # fluency_model=fm,
     )
     print('-'*40 + ' [Prompt Start] ' + '-'*40)
     print(bt.apply_back_translate_template(inputs_batch[0]))
@@ -162,4 +204,3 @@ if __name__ == "__main__":
     target_instructions = bt.back_translate(inputs_batch)
     for target_instructions in target_instructions:
         print(target_instructions)
-    del bt

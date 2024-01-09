@@ -1,5 +1,5 @@
-# PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:1 --cpus-per-task=8 python3 back_translate.py
-# PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:8 --cpus-per-task=64 accelerate launch --num_processes=8 back_translate.py
+# PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:1 --cpus-per-task=8 python3 back_translate.py --input_path "output/red-teaming/llama-2-7b-fewshot/seed/score.jsonl" --output_path "output/red-teaming/llama-2-7b-fewshot/iter1/instruction.jsonl"
+# PYTHONPATH=. srun -p llm-safety --quotatype=reserved --gres=gpu:8 --cpus-per-task=64 accelerate launch --num_processes=8 back_translate.py --input_path "output/red-teaming/llama-2-7b-fewshot/seed/score.jsonl" --output_path "output/red-teaming/llama-2-7b-fewshot/iter1/instruction.jsonl"
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -9,13 +9,12 @@ import numpy as np
 from datasets import load_dataset, Dataset
 from accelerate import Accelerator
 
-from src.utils import batchify_apply, ChatInput, set_seeds
+from src.utils import batchify_apply, ChatInput, set_seeds, print_local_main
 from src.back_translators import BackTranslatorsRegistry, BackTranslateInput, ChatInput
 
 
 @dataclass
 class ScriptArguments:
-    # classifier_model_cls: field(metadata={"help": "e.g., `llama-2-chat`"})
     input_path: str = field(metadata={"help": "e.g., ***/score.jsonl"})
     output_path: str = field(metadata={"help": "e.g., ***/instruction.jsonl"})
     back_translator_model_cls: Optional[str] = field(default="llama-2-fewshot", metadata={"help": "e.g., `llama-2-fewshot`"})
@@ -26,8 +25,8 @@ class ScriptArguments:
     num_examplars: Optional[int] = field(default=1, metadata={"help": "the number of examplars for in-context learning"})
     num_new_instruction: Optional[int] = field(default=1000, metadata={"help": "number of new instructions to sample"})
 script_args = tyro.cli(ScriptArguments)
-
-set_seeds(script_args.seed)
+print_local_main(script_args)
+set_seeds(script_args.seed) # this is important
 
 seed_results = load_dataset("json", data_files=script_args.input_path, split='train')
 safety_probs = torch.Tensor(seed_results['safety_score'])
@@ -47,7 +46,11 @@ inputs_dataset = [
     )
     for choice in choices
 ]
-bt = BackTranslatorsRegistry[script_args.back_translator_model_cls](model_name=script_args.back_translator_model_name)
+
+if script_args.back_translator_model_name is None:
+    bt = BackTranslatorsRegistry[script_args.back_translator_model_cls]()
+else: 
+    bt = BackTranslatorsRegistry[script_args.back_translator_model_cls](model_name=script_args.back_translator_model_name)
 
 instructions = batchify_apply(
     bt.back_translate, 
@@ -62,4 +65,5 @@ dataset = Dataset.from_dict({
     'response_before_translation': [seed_results['response'][choice] for choice in choices],
 })
 
-dataset.to_json(script_args.output_path)
+if Accelerator().is_main_process:
+    dataset.to_json(script_args.output_path)

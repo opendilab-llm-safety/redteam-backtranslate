@@ -19,7 +19,7 @@ class ClassiferBase(ABC):
     def apply_classification_template(self, chat: ChatInput):
         return self.classification_template.format(instruction=chat.instruction, response=chat.response)
 
-    def predict(instructions: List[ChatInput]) -> List[float]:
+    def predict(chats: List[ChatInput]) -> List[float]:
         """return the prob of positive(safe/positive/non-toxic etc.)"""
         raise NotImplementedError
 

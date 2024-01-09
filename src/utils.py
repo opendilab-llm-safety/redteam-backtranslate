@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Text, List, Any, Callable, Optional, Iterator, TypeVar
 
 import tqdm
+import numpy as np
 import torch
 from torch.utils.data import Sampler, Dataset, DataLoader
 import accelerate
@@ -81,6 +82,57 @@ def prepare_model_for_peft(model, peft_config, args):
     return model
 
 
+def pad_labels(features, tokenizer, pad_to_multiple_of=None, label_pad_token_id=-100):
+    # copied from https://github.com/huggingface/transformers/blob/v4.34.1/src/transformers/data/data_collator.py#L562-L584
+    labels = [feature["labels"] for feature in features] if "labels" in features[0].keys() else None
+    # We have to pad the labels before calling `tokenizer.pad` as this method won't pad them and needs them of the
+    # same length to return tensors.
+    if labels is not None:
+        max_label_length = max(len(l) for l in labels)
+        if pad_to_multiple_of is not None:
+            max_label_length = (
+                (max_label_length + pad_to_multiple_of - 1)
+                // pad_to_multiple_of
+                * pad_to_multiple_of
+            )
+
+        padding_side = tokenizer.padding_side
+        for feature in features:
+            remainder = [label_pad_token_id] * (max_label_length - len(feature["labels"]))
+            if isinstance(feature["labels"], list):
+                feature["labels"] = (
+                    feature["labels"] + remainder if padding_side == "right" else remainder + feature["labels"]
+                )
+            elif padding_side == "right":
+                feature["labels"] = np.concatenate([feature["labels"], remainder]).astype(np.int64)
+            else:
+                feature["labels"] = np.concatenate([remainder, feature["labels"]]).astype(np.int64)
+
+
+def get_batch_logps(
+    logits: torch.FloatTensor,
+    labels: torch.LongTensor,
+    average_log_prob: bool = False,
+    label_pad_token_id: int = -100,
+) -> torch.FloatTensor:
+    if logits.shape[:-1] != labels.shape:
+        raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
+
+    labels = labels[:, 1:].clone()
+    logits = logits[:, :-1, :]
+    loss_mask = labels != label_pad_token_id
+
+    # dummy token; we'll ignore the losses on these tokens later
+    labels[labels == label_pad_token_id] = 0
+
+    per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+    if average_log_prob:
+        return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+    else:
+        return (per_token_logps * loss_mask).sum(-1)
+
+
 @Accelerator().on_local_main_process
 def print_local_main(text):
     print(text)
@@ -144,8 +196,6 @@ def batch_generate_decode(
     eos_string=None,
     generation_configs=None,
 ) -> List[Text]:
-
-    # tokenized and move to device
     inputs_tokens = prepare_input(tokenizer(inputs, padding=True, return_tensors="pt"))
     start_length = inputs_tokens["input_ids"].size(1)
 
@@ -160,12 +210,20 @@ def batch_generate_decode(
     else:
         stopping_criteria = None
 
-    outputs_tokens = model.generate(
-        input_ids=inputs_tokens["input_ids"],
-        attention_mask=inputs_tokens["attention_mask"],
-        stopping_criteria=stopping_criteria, # optional
-        **generation_configs, #optional
-    )
+    err_cnt = 0
+    # catch `RuntimeError: probability tensor contains either `inf`, `nan` or element < 0`
+    while True:
+        try:
+            outputs_tokens = model.generate(
+                input_ids=inputs_tokens["input_ids"],
+                attention_mask=inputs_tokens["attention_mask"],
+                stopping_criteria=stopping_criteria,
+                **generation_configs,
+            )
+            break
+        except RuntimeError:
+            err_cnt += 1
+            if err_cnt >= 3: generation_configs["do_sample"] = False
     outputs = tokenizer.batch_decode(
         outputs_tokens[:, start_length:],
         skip_special_tokens=True,

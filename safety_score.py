@@ -15,7 +15,6 @@ from src.classifiers.modules import ClassifierBeaverTails
 class ScriptArguments:
     input_path: str = field(metadata={"help": "e.g., ***/instruction_response.jsonl"})
     output_path: str = field(metadata={"help": "e.g., ***/score.jsonl"})
-    # classifier_model_cls: field(metadata={"help": "e.g., `TODO`"})
     classifier_model_name: Optional[str] = field(default="output/classifier/beavertails/best_checkpoint", metadata={"help": "e.g., 'output/classifier/beavertails/best_checkpoint'"})
     seed: Optional[int] = field(default=1, metadata={"help": "seed"})
     sanity_check: Optional[bool] = field(default=False, metadata={"help": "True or False"})
@@ -36,6 +35,6 @@ prob = batchify_apply(
     split_among_ranks=True,
 )
 
-if Accelerator().is_main_process():
+if Accelerator().is_main_process:
     dataset = Dataset.from_dict({'safety_score': prob, 'response': instructions_responses_dataset['response'], 'instruction': instructions_responses_dataset['instruction']})
     dataset.to_json(script_args.output_path)
